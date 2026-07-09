@@ -1,0 +1,78 @@
+{
+  "sessions": [
+    {
+      "id": "mock-aaa-active-known",
+      "title": "Implement DHCP relay adapter",
+      "status": "active",
+      "model": "claude-sonnet-5",
+      "usage": {"input_tokens": 182000, "output_tokens": 24500, "total_tokens": 206500,
+                "estimated_cost": 0.91, "source": "mock", "confidence": "high"},
+      "process": {"pid": 41001, "ppid": 40990, "command": "claude --continue",
+                  "cwd": "/tmp/mock/dhcp-relay", "tty": "pts/3",
+                  "cpu_percent": 12.5, "memory_mb": 412.0,
+                  "started_at": "2026-07-08T08:00:00+00:00"},
+      "project_root": "/tmp/mock/dhcp-relay",
+      "cwd": "/tmp/mock/dhcp-relay",
+      "session_file": "/tmp/mock/dhcp-relay/.claude-session.jsonl",
+      "markdown_file": "/tmp/mock/dhcp-relay/notes.md",
+      "started_at": "2026-07-08T08:00:00+00:00",
+      "updated_at": "2026-07-08T09:30:00+00:00",
+      "confidence": "high",
+      "evidence": [{"kind": "cwd-match", "detail": "pid 41001 cwd == session cwd"}],
+      "git_branch": "feature/dhcp-relay"
+    },
+    {
+      "id": "mock-bbb-active-unknown-model",
+      "title": "Debug BGP flap on testbed",
+      "status": "active",
+      "model": null,
+      "usage": {"source": null, "confidence": "unknown"},
+      "process": {"pid": 41002, "command": "claude", "cwd": "/tmp/mock/sonic-tests",
+                  "cpu_percent": 3.0, "memory_mb": 210.0,
+                  "started_at": "2026-07-08T09:00:00+00:00"},
+      "project_root": "/tmp/mock/sonic-tests",
+      "cwd": "/tmp/mock/sonic-tests/bgp",
+      "session_file": "/tmp/mock/sonic-tests/session.jsonl",
+      "updated_at": "2026-07-08T09:45:00+00:00",
+      "confidence": "medium",
+      "evidence": [{"kind": "project-root-match", "detail": "pid 41002 within project root"}]
+    },
+    {
+      "id": "mock-ccc-completed",
+      "title": "Write Redmine close-out report",
+      "status": "completed",
+      "model": "claude-opus-4-8",
+      "usage": {"input_tokens": 54000, "output_tokens": 9100, "total_tokens": 63100,
+                "source": "mock", "confidence": "high"},
+      "project_root": "/tmp/mock/reports",
+      "cwd": "/tmp/mock/reports",
+      "session_file": "/tmp/mock/reports/session.jsonl",
+      "markdown_file": "/tmp/mock/reports/closeout.md",
+      "started_at": "2026-07-05T10:00:00+00:00",
+      "updated_at": "2026-07-05T12:00:00+00:00",
+      "confidence": "unknown",
+      "evidence": [{"kind": "file", "detail": "transcript found, no process"}]
+    },
+    {
+      "id": "mock-ddd-idle-no-usage",
+      "title": null,
+      "status": "idle",
+      "model": "claude-haiku-4-5-20251001",
+      "usage": {"source": null, "confidence": "unknown"},
+      "project_root": "/tmp/mock/scratch",
+      "cwd": "/tmp/mock/scratch",
+      "session_file": "/tmp/mock/scratch/session.jsonl",
+      "updated_at": "2026-07-08T09:20:00+00:00",
+      "confidence": "low",
+      "evidence": [{"kind": "mtime", "detail": "recency-only match"}]
+    },
+    {
+      "id": "mock-eee-unknown-everything",
+      "status": "unknown",
+      "usage": {"confidence": "unknown"},
+      "session_file": "/tmp/mock/unknown/session.jsonl",
+      "confidence": "unknown",
+      "evidence": []
+    }
+  ]
+}
