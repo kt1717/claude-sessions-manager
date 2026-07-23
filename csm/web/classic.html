@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Session Monitor — Classic</title>
+<style>
+  :root { --bg:#12141a; --panel:#1b1f2a; --line:#2b3040; --fg:#e6e8ee; --dim:#8a92a6;
+          --active:#3fb950; --idle:#d29922; --done:#6e7681; --unknown:#f85149; --accent:#4d8dff; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
+  header { display:flex; align-items:center; gap:12px; padding:10px 16px;
+           border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:2;}
+  header h1 { font-size:16px; margin:0; }
+  header .spacer { flex:1; }
+  a.navlink { color:var(--accent); text-decoration:none; font-size:13px; }
+  a.navlink:hover { text-decoration:underline; }
+  input[type=search] { background:var(--panel); border:1px solid var(--line); color:var(--fg);
+           border-radius:6px; padding:6px 10px; width:260px; }
+  button { background:var(--panel); border:1px solid var(--line); color:var(--fg);
+           border-radius:6px; padding:6px 10px; cursor:pointer; }
+  button:hover { border-color: var(--accent); }
+  .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; padding:12px 16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
+  .card .num { font-size:22px; font-weight:600; }
+  .card .lbl { color:var(--dim); font-size:12px; }
+  main { display:grid; grid-template-columns: 1fr 380px; gap:12px; padding:0 16px 16px; }
+  #tree, #detail { background:var(--panel); border:1px solid var(--line); border-radius:8px;
+           padding:12px; min-height:400px; overflow:auto; }
+  #detail { position:sticky; top:110px; max-height:calc(100vh - 130px); }
+  ul.tree { list-style:none; padding-left:18px; margin:4px 0; }
+  ul.tree > li { margin:3px 0; }
+  .node { cursor:pointer; padding:2px 6px; border-radius:4px; display:inline-block; }
+  .node:hover { background:var(--line); }
+  .node.selected { outline:1px solid var(--accent); }
+  .badge { display:inline-block; padding:0 7px; border-radius:9px; font-size:11px; margin-right:6px; }
+  .badge.active { background:var(--active); color:#04160a; }
+  .badge.idle { background:var(--idle); color:#231a02; }
+  .badge.completed { background:var(--done); color:#111; }
+  .badge.unknown { background:var(--unknown); color:#1c0605; }
+  .dim { color:var(--dim); }
+  .mono { font-family:ui-monospace, monospace; font-size:12px; }
+  dl { display:grid; grid-template-columns:130px 1fr; gap:4px 8px; margin:8px 0; }
+  dt { color:var(--dim); } dd { margin:0; word-break:break-all; }
+  .actions { display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+  #reader { white-space:pre-wrap; background:var(--bg); border:1px solid var(--line);
+            border-radius:6px; padding:10px; margin-top:10px; max-height:300px; overflow:auto; }
+  .evid { font-size:12px; color:var(--dim); margin:2px 0; }
+  #toast { position:fixed; bottom:16px; right:16px; background:var(--panel);
+           border:1px solid var(--accent); border-radius:8px; padding:10px 14px; display:none; }
+  @media (max-width: 900px){ main { grid-template-columns:1fr; } #detail{position:static;} }
+</style>
+</head>
+<body>
+<header>
+  <h1>Claude Session Monitor <span class="dim" style="font-weight:400">— classic</span></h1>
+  <input id="search" type="search" placeholder="filter by mission / project / model / id">
+  <div class="spacer"></div>
+  <a class="navlink" href="/">→ Mindmap view</a>
+  <span id="refreshInfo" class="dim">–</span>
+  <button id="pauseBtn">Pause</button>
+</header>
+
+<div class="cards" id="cards"></div>
+
+<main>
+  <div id="tree"><span class="dim">Loading…</span></div>
+  <div id="detail"><span class="dim">Click a session to see details.</span></div>
+</main>
+<div id="toast"></div>
+
+<script>
+let paused = false, selectedId = null, treeData = null;
+const $ = s => document.querySelector(s);
+
+function esc(x){ const d=document.createElement('div'); d.textContent = x==null?'':String(x); return d.innerHTML; }
+function unk(x){ return (x===null||x===undefined||x==='') ? '<span class="dim">unknown</span>' : esc(x); }
+function toast(msg){ const t=$('#toast'); t.textContent=msg; t.style.display='block';
+  clearTimeout(t._h); t._h=setTimeout(()=>t.style.display='none', 3500); }
+
+async function api(path, opts){
+  const r = await fetch(path, opts);
+  if(!r.ok){
+    const body = await r.json().catch(()=>null);
+    throw new Error((body && body.detail) || ('HTTP '+r.status));
+  }
+  return r.json();
+}
+
+function matchesFilter(s, mission){
+  const q = $('#search').value.trim().toLowerCase();
+  if(!q) return true;
+  return [s.id, s.model, s.cwd, s.project_root, s.title, mission.name]
+    .some(v => v && String(v).toLowerCase().includes(q));
+}
+
+function renderCards(missions){
+  const all = missions.flatMap(m=>m.sessions);
+  const by = st => all.filter(s=>s.status===st).length;
+  const mem = all.reduce((a,s)=>a+((s.process&&s.process.memory_mb)||0),0);
+  const tok = all.reduce((a,s)=>a+((s.usage&&s.usage.total_tokens)||0),0);
+  const tokKnown = all.some(s=>s.usage&&s.usage.total_tokens!=null);
+  const cards = [
+    ['active sessions', by('active')], ['idle sessions', by('idle')],
+    ['completed', by('completed')], ['missions', missions.length],
+    ['process memory', mem? mem.toFixed(0)+' MB' : 'unknown'],
+    ['known tokens', tokKnown? tok.toLocaleString() : 'unknown'],
+  ];
+  $('#cards').innerHTML = cards.map(([l,n])=>
+    `<div class="card"><div class="num">${esc(n)}</div><div class="lbl">${esc(l)}</div></div>`).join('');
+}
+
+function sessionNode(s, mission){
+  const badge = `<span class="badge ${s.status}">${s.status}</span>`;
+  const sel = s.id===selectedId ? ' selected':'';
+  return `<li><span class="node session${sel}" data-id="${esc(s.id)}">${badge}
+      <b>${esc(s.id.slice(0,8))}</b> ${unk(s.title)}
+      <span class="dim">(${s.model?esc(s.model):'unknown model'})</span></span>
+    <ul class="tree">
+      ${s.process? `<li class="mono dim">pid ${s.process.pid}${s.process.tty?' tty '+esc(s.process.tty):''}
+         ${s.process.memory_mb? '· '+s.process.memory_mb+' MB':''}</li>`:''}
+      ${s.session_file? `<li class="mono dim">session: ${esc(s.session_file)}</li>`:''}
+      ${s.markdown_file? `<li class="mono dim">md: ${esc(s.markdown_file)}</li>`:''}
+    </ul></li>`;
+}
+
+function renderTree(data){
+  treeData = data;
+  renderCards(data.missions);
+  let html = '<ul class="tree">';
+  for(const m of data.missions){
+    const sess = m.sessions.filter(s=>matchesFilter(s,m));
+    if(!sess.length) continue;
+    html += `<li><span class="node"><b>🗂 ${esc(m.name)}</b>
+        <span class="dim">${m.project_root?esc(m.project_root):'unknown project'}</span>
+        ${m.git_branch? `<span class="dim">⎇ ${esc(m.git_branch)}</span>`:''}</span>
+      <ul class="tree">${sess.map(s=>sessionNode(s,m)).join('')}</ul></li>`;
+  }
+  if(data.orphan_processes && data.orphan_processes.length){
+    html += `<li><span class="node"><b style="color:var(--unknown)">uncorrelated processes</b></span><ul class="tree">`
+      + data.orphan_processes.map(p=>`<li class="mono dim">pid ${p.pid} — ${esc((p.command||'').slice(0,90))}</li>`).join('')
+      + '</ul></li>';
+  }
+  html += '</ul>';
+  $('#tree').innerHTML = html || '<span class="dim">No sessions found.</span>';
+  document.querySelectorAll('.node.session').forEach(el=>
+    el.addEventListener('click', ()=>selectSession(el.dataset.id)));
+}
+
+async function selectSession(id){
+  selectedId = id;
+  document.querySelectorAll('.node.session').forEach(el=>
+    el.classList.toggle('selected', el.dataset.id===id));
+  const s = await api('/api/sessions/'+encodeURIComponent(id));
+  const u = s.usage||{};
+  const missionName = (treeData.missions.find(m=>m.sessions.some(x=>x.id===id))||{}).name;
+  $('#detail').innerHTML = `
+    <h3 style="margin-top:0"><span class="badge ${s.status}">${s.status}</span>${esc(s.id)}</h3>
+    <dl>
+      <dt>title</dt><dd>${unk(s.title)}</dd>
+      <dt>mission</dt><dd>${unk(missionName)}</dd>
+      <dt>project root</dt><dd class="mono">${unk(s.project_root)}</dd>
+      <dt>cwd</dt><dd class="mono">${unk(s.cwd)}</dd>
+      <dt>model</dt><dd>${unk(s.model)}</dd>
+      <dt>tokens in/out</dt><dd>${u.total_tokens!=null? esc(u.input_tokens+' / '+u.output_tokens):'<span class="dim">unknown</span>'}</dd>
+      <dt>est. cost</dt><dd>${u.estimated_cost!=null? '$'+esc(u.estimated_cost):'<span class="dim">unknown</span>'}</dd>
+      <dt>process</dt><dd>${s.process? esc('pid '+s.process.pid+' · '+(s.process.cpu_percent??'?')+'% CPU · '+(s.process.memory_mb??'?')+' MB'):'<span class="dim">none attached</span>'}</dd>
+      <dt>session file</dt><dd class="mono">${unk(s.session_file)}</dd>
+      <dt>markdown</dt><dd class="mono">${unk(s.markdown_file)}</dd>
+      <dt>confidence</dt><dd>${esc(s.confidence)}</dd>
+      <dt>updated</dt><dd>${unk(s.updated_at)}</dd>
+    </dl>
+    <div class="actions">
+      <button id="btnOpen">Open terminal here</button>
+      <button id="btnRead">Read session file</button>
+      <button id="btnCopyPath">Copy session path</button>
+      <button id="btnCopyDiag">Copy diagnostic info</button>
+    </div>
+    <div><b class="dim">evidence</b>${(s.evidence||[]).map(e=>`<div class="evid">• ${esc(e.kind)}: ${esc(e.detail)}</div>`).join('')||'<div class="evid dim">none</div>'}</div>
+    <div id="reader" style="display:none"></div>`;
+  $('#btnOpen').onclick = async ()=>{
+    const pre = await api('/api/sessions/'+encodeURIComponent(id)+'/open-command');
+    if(!pre.command){ toast('Cannot open: '+(pre.reason||'unknown')); return; }
+    if(!confirm('Run: '+pre.command.join(' ')+'\n(cwd: '+pre.cwd+')')) return;
+    try{ await api('/api/sessions/'+encodeURIComponent(id)+'/open',{method:'POST'});
+      toast('Terminal launched.');}catch(e){ toast('Failed: '+e.message); }
+  };
+  $('#btnRead').onclick = async ()=>{
+    try{ const r = await api('/api/sessions/'+encodeURIComponent(id)+'/read');
+      const el=$('#reader'); el.style.display='block';
+      el.textContent = r.path+'\n\n'+r.content; }catch(e){ toast('Read failed: '+e.message); }
+  };
+  $('#btnCopyPath').onclick = ()=>{ navigator.clipboard.writeText(s.session_file||''); toast('Path copied.'); };
+  $('#btnCopyDiag').onclick = ()=>{
+    navigator.clipboard.writeText(JSON.stringify(s,null,2)); toast('Diagnostic JSON copied.'); };
+}
+
+async function refresh(){
+  if(paused) return;
+  try{
+    const data = await api('/api/tree');
+    renderTree(data);
+    $('#refreshInfo').textContent = 'refreshed '+new Date().toLocaleTimeString();
+  }catch(e){ $('#refreshInfo').textContent = 'refresh failed: '+e.message; }
+}
+$('#pauseBtn').onclick = ()=>{ paused=!paused; $('#pauseBtn').textContent = paused?'Resume':'Pause'; };
+$('#search').addEventListener('input', ()=> treeData && renderTree(treeData));
+refresh();
+setInterval(refresh, 4000);
+</script>
+</body>
+</html>

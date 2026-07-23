@@ -60,15 +60,17 @@ def build_snapshot(config: Config, include_processes: bool = True) -> Snapshot:
                 seen_ids.add(s.id)
                 sessions.append(s)
 
-    # User overrides for renamable tasks (session/mission names).
+    # User overrides for renamable tasks (session/mission names) and archiving.
     labels = load_labels(config)
     session_labels = labels.get("sessions", {})
     mission_labels = labels.get("missions", {})
+    archived_ids = set(labels.get("archived", []))
     for s in sessions:
         override = session_labels.get(s.id)
         if override:
             s.label = override
             s.title = override  # user name wins over the auto-derived title
+        s.archived = s.id in archived_ids
 
     processes = discover_processes(config) if include_processes else []
     orphans = correlate(sessions, processes, config)

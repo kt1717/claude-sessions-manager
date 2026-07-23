@@ -21,6 +21,28 @@ def test_parse_transcript_full(transcript, tmp_path):
     assert s.started_at is not None and s.updated_at > s.started_at
 
 
+def test_launch_cwd_survives_later_cwd_drift(tmp_path):
+    # Regression: a session that `cd`s partway through (e.g. into a subproject)
+    # must keep resuming from where `claude` was actually launched, since that's
+    # the directory ~/.claude/projects/<encoded> is keyed on — not wherever the
+    # transcript's cwd field last pointed.
+    launch_dir = tmp_path / "home"
+    later_dir = tmp_path / "home" / "proj"
+    launch_dir.mkdir()
+    later_dir.mkdir()
+    lines = [
+        {"type": "user", "cwd": str(launch_dir),
+         "timestamp": "2026-07-08T10:00:00Z", "message": {}},
+        {"type": "assistant", "cwd": str(later_dir),
+         "timestamp": "2026-07-08T10:05:00Z", "message": {}},
+    ]
+    f = tmp_path / "s.jsonl"
+    f.write_text("\n".join(json.dumps(line) for line in lines))
+    s = parse_transcript(f, Config())
+    assert s.cwd == str(later_dir)
+    assert s.launch_cwd == str(launch_dir)
+
+
 def test_usage_unknown_when_absent(tmp_path):
     f = tmp_path / "s.jsonl"
     f.write_text(json.dumps({"type": "user", "cwd": str(tmp_path),

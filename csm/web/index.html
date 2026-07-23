@@ -9,6 +9,9 @@
   :root { --bg:#12141a; --panel:#1b1f2a; --line:#2b3040; --fg:#e6e8ee; --dim:#8a92a6;
           --active:#3fb950; --idle:#d29922; --done:#6e7681; --unknown:#f85149; --accent:#4d8dff;
           --task:#b07cff; }
+  .legend { position:absolute; right:8px; bottom:8px; z-index:1; color:var(--dim); font-size:11px;
+            display:flex; gap:10px; pointer-events:none; }
+  .legend span { display:inline-flex; align-items:center; gap:4px; }
   * { box-sizing: border-box; }
   body { margin:0; font:14px/1.45 system-ui, sans-serif; background:var(--bg); color:var(--fg); }
   header { display:flex; align-items:center; gap:12px; padding:10px 16px;
@@ -21,18 +24,22 @@
            border-radius:6px; padding:6px 10px; cursor:pointer; }
   button:hover { border-color: var(--accent); }
   button.primary { border-color: var(--accent); color:#fff; }
+  button.danger:hover { border-color: var(--unknown); }
+  label.toggle { display:flex; align-items:center; gap:6px; color:var(--dim); font-size:13px; cursor:pointer; user-select:none; }
+  a.navlink { color:var(--accent); text-decoration:none; font-size:13px; }
+  a.navlink:hover { text-decoration:underline; }
   .cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); gap:10px; padding:12px 16px; }
   .card { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:10px 12px; }
   .card .num { font-size:22px; font-weight:600; }
   .card .lbl { color:var(--dim); font-size:12px; }
   main { display:grid; grid-template-columns: 1fr 400px; gap:12px; padding:0 16px 16px; }
   #graphWrap, #detail { background:var(--panel); border:1px solid var(--line); border-radius:8px; }
-  #graphWrap { position:relative; min-height:520px; overflow:hidden; }
+  #graphWrap { position:relative; height:calc(100vh - 230px); min-height:580px; overflow:hidden; }
   #cy { position:absolute; inset:0; }
   .graphhint { position:absolute; left:10px; bottom:8px; z-index:1; color:var(--dim); font-size:11px;
                pointer-events:none; }
   .graphtools { position:absolute; right:8px; top:8px; z-index:1; display:flex; gap:6px; }
-  #detail { padding:12px; min-height:520px; overflow:auto; position:sticky; top:110px;
+  #detail { padding:12px; min-height:580px; overflow:auto; position:sticky; top:110px;
             max-height:calc(100vh - 130px); }
   .badge { display:inline-block; padding:0 7px; border-radius:9px; font-size:11px; margin-right:6px; }
   .badge.active { background:var(--active); color:#04160a; }
@@ -67,7 +74,9 @@
 <header>
   <h1>Claude Session Monitor</h1>
   <input id="search" type="search" placeholder="filter by task / project / model / id">
+  <label class="toggle"><input type="checkbox" id="showArchived"> show archived</label>
   <div class="spacer"></div>
+  <a class="navlink" href="/classic">→ Classic view</a>
   <span id="refreshInfo" class="dim">–</span>
   <button id="pauseBtn">Pause</button>
 </header>
@@ -81,6 +90,7 @@
       <button id="fitBtn" title="Fit graph to view">Fit</button>
     </div>
     <div class="graphhint">click a task to expand/collapse · click a session for details · right-click to rename · scroll to zoom · drag to pan</div>
+    <div class="legend"><span>🟢 active</span><span>🟡 idle</span><span>⚪ completed</span><span>🔴 unknown</span></div>
   </div>
   <div id="detail"><span class="dim">Click a session node to see details, todos, and its sub-agents.</span></div>
 </main>
@@ -90,8 +100,15 @@
 const PALETTE = { active:'#3fb950', idle:'#d29922', completed:'#6e7681', unknown:'#f85149',
                   accent:'#4d8dff', task:'#b07cff', panel:'#1b1f2a', line:'#2b3040',
                   fg:'#e6e8ee', dim:'#8a92a6', bg:'#12141a' };
+const STATUS_DOT = { active:'🟢', idle:'🟡', completed:'⚪', unknown:'🔴' };
+// One color per top-level task branch (GitMind/XMind-style) — cycles if there
+// are more tasks than colors. Lets you trace root -> task -> session at a
+// glance instead of every branch looking the same gray.
+const BRANCH_COLORS = ['#4d8dff','#3fb950','#f0883e','#db61a2','#a371f7','#39c5cf',
+                        '#e3b341','#f85149','#56d4dd','#ff9bce','#7ee787','#ffa657'];
+function branchColorFor(index){ return BRANCH_COLORS[index % BRANCH_COLORS.length]; }
 let paused=false, selectedId=null, treeData=null, cy=null, cySub=null, lastSig=null;
-let expanded=new Set(), didInitFocus=false;
+let expanded=new Set(), didInitFocus=false, showArchived=false;
 const $ = s => document.querySelector(s);
 function esc(x){ const d=document.createElement('div'); d.textContent=x==null?'':String(x); return d.innerHTML; }
 function unk(x){ return (x===null||x===undefined||x==='')?'<span class="dim">unknown</span>':esc(x); }
@@ -113,8 +130,15 @@ function matchesFilter(s, m){
     .some(v => v && String(v).toLowerCase().includes(q));
 }
 
+// Archived sessions are hidden from the dashboard by default (display-only —
+// the underlying transcript is never touched); the "show archived" checkbox
+// reveals them, dimmed, in both the cards and the graph.
+function visibleSessions(m){
+  return showArchived ? m.sessions : m.sessions.filter(s=>!s.archived);
+}
+
 function renderCards(missions){
-  const all = missions.flatMap(m=>m.sessions);
+  const all = missions.flatMap(m=>visibleSessions(m));
   const by = st => all.filter(s=>s.status===st).length;
   const subs = all.reduce((a,s)=>a+((s.subagents&&s.subagents.length)||0),0);
   const tok = all.reduce((a,s)=>a+((s.usage&&s.usage.total_tokens)||0),0);
@@ -134,46 +158,72 @@ function renderCards(missions){
 function buildElements(data){
   const q = $('#search').value.trim().toLowerCase();
   const els = [{ data:{ id:'root', label:'Sessions', kind:'root' } }];
+  let branchIdx = 0;
   for(const m of data.missions){
-    const sess = m.sessions.filter(s=>matchesFilter(s,m));
+    const sess = visibleSessions(m).filter(s=>matchesFilter(s,m));
     if(!sess.length) continue;
     const key = missionKey(m);
     const mid = 'm:'+key;
+    const color = branchColorFor(branchIdx++);
     const open = expanded.has(key) || !!q;   // search forces open
     const arrow = open ? '▾ ' : '▸ ';
-    els.push({ data:{ id:mid, kind:'task', mkey:key, name:missionName(m),
+    els.push({ data:{ id:mid, kind:'task', mkey:key, name:missionName(m), branchColor:color,
                       label:arrow+missionName(m)+'  ('+sess.length+')' } });
-    els.push({ data:{ id:'e:'+mid, source:'root', target:mid } });
+    els.push({ data:{ id:'e:'+mid, source:'root', target:mid, kind:'root-edge', branchColor:color } });
     if(!open) continue;
     for(const s of sess){
       const sid = 's:'+s.id;
-      els.push({ data:{ id:sid, label:sessionName(s), sub:(s.model||''), kind:'session',
-                        status:s.status||'unknown', sessId:s.id } });
-      els.push({ data:{ id:'e:'+sid, source:mid, target:sid } });
+      const dot = STATUS_DOT[s.status] || STATUS_DOT.unknown;
+      els.push({ data:{ id:sid, label:dot+' '+(s.archived?'📦 ':'')+sessionName(s), sub:(s.model||''),
+                        kind:'session', status:s.status||'unknown', sessId:s.id,
+                        archived:!!s.archived, branchColor:color } });
+      els.push({ data:{ id:'e:'+sid, source:mid, target:sid, kind:'leaf-edge', branchColor:color } });
     }
   }
   return els;
 }
 
+// GitMind/XMind-style: pill nodes, a clear size/weight step per tier (root >
+// task > session), and branch color carried from each top-level task down
+// through its sessions and connecting edges so a lineage reads at a glance.
 const CY_STYLE = [
   { selector:'node', style:{ 'label':'data(label)', 'color':PALETTE.fg, 'font-size':11,
-      'text-valign':'center', 'text-halign':'center', 'text-wrap':'wrap', 'text-max-width':130,
-      'width':'label', 'height':'label', 'padding':'8px', 'shape':'round-rectangle',
-      'background-color':PALETTE.panel, 'border-width':1.5, 'border-color':PALETTE.line } },
-  { selector:'node[kind="root"]', style:{ 'background-color':PALETTE.accent, 'color':'#fff', 'border-color':PALETTE.accent, 'font-weight':'bold' } },
-  { selector:'node[kind="task"]', style:{ 'border-color':PALETTE.task, 'border-width':2, 'font-weight':'bold' } },
-  { selector:'node[status="active"]', style:{ 'border-color':PALETTE.active, 'border-width':2.5 } },
-  { selector:'node[status="idle"]', style:{ 'border-color':PALETTE.idle, 'border-width':2.5 } },
-  { selector:'node[status="completed"]', style:{ 'border-color':PALETTE.completed } },
-  { selector:'node[status="unknown"]', style:{ 'border-color':PALETTE.unknown } },
-  { selector:'node.sel', style:{ 'background-color':PALETTE.accent, 'color':'#fff', 'border-color':'#fff', 'border-width':2.5 } },
-  { selector:'edge', style:{ 'width':1.4, 'line-color':PALETTE.line, 'curve-style':'bezier',
-      'target-arrow-shape':'none' } },
-  { selector:'node.dimmed', style:{ 'opacity':0.25 } },
+      'text-valign':'center', 'text-halign':'center', 'text-wrap':'wrap', 'text-max-width':140,
+      'width':'label', 'height':'label', 'padding':'9px 14px', 'shape':'round-rectangle',
+      'corner-radius':'auto', 'background-color':PALETTE.panel,
+      'border-width':1.5, 'border-color':PALETTE.line, 'text-outline-width':0 } },
+  { selector:'node[kind="root"]', style:{ 'background-color':PALETTE.accent, 'color':'#fff',
+      'border-width':0, 'font-weight':700, 'font-size':15, 'padding':'14px 20px' } },
+  { selector:'node[kind="task"]', style:{
+      'background-color':'data(branchColor)', 'background-opacity':0.16,
+      'border-color':'data(branchColor)', 'border-width':2.5,
+      'color':'#fff', 'font-weight':700, 'font-size':13, 'padding':'11px 16px' } },
+  { selector:'node[kind="session"]', style:{
+      'background-color':PALETTE.panel, 'border-color':'data(branchColor)', 'border-width':1.75,
+      'font-size':10.5, 'padding':'7px 12px', 'text-max-width':150 } },
+  { selector:'node.sel', style:{ 'background-color':PALETTE.accent, 'background-opacity':1,
+      'color':'#fff', 'border-color':'#fff', 'border-width':2.5 } },
+  { selector:'node.archived', style:{ 'opacity':0.45, 'border-style':'dashed' } },
+  { selector:'edge[kind="root-edge"]', style:{ 'width':3, 'line-color':'data(branchColor)',
+      'opacity':0.9, 'curve-style':'bezier', 'target-arrow-shape':'none' } },
+  { selector:'edge[kind="leaf-edge"]', style:{ 'width':1.6, 'line-color':'data(branchColor)',
+      'opacity':0.55, 'curve-style':'bezier', 'target-arrow-shape':'none' } },
 ];
 
+// Cytoscape's breadthfirst layout fans top-down by default; swapping x/y via
+// its `transform` hook turns that into a left-to-right tree with no extra library.
 function layout(){ return { name:'breadthfirst', directed:true, roots:'#root',
-  spacingFactor:1.15, padding:30, animate:false }; }
+  spacingFactor:1.05, padding:30, animate:false,
+  transform:(node, pos)=>({x:pos.y, y:pos.x}) }; }
+
+// A tree with many top-level tasks can need a very small zoom to fit
+// everything at once — unreadable, and not how mindmap tools behave (they
+// let you pan a canvas rather than shrinking text to dust). Floor the zoom
+// at a legible level and let the user scroll/pan to reach the rest.
+const MIN_READABLE_ZOOM = 0.55;
+function settleView(){
+  if(cy.zoom() < MIN_READABLE_ZOOM){ cy.zoom(MIN_READABLE_ZOOM); cy.center(); }
+}
 
 function renderGraph(data){
   treeData = data;
@@ -182,18 +232,26 @@ function renderGraph(data){
   const sig = els.map(e=>e.data.id).join('|');
   if(!cy){
     cy = cytoscape({ container:$('#cy'), elements:els, style:CY_STYLE, layout:layout(),
-      wheelSensitivity:0.2, minZoom:0.2, maxZoom:2.5 });
+      wheelSensitivity:0.2, minZoom:0.05, maxZoom:2.5 });
     wireGraph();
+    settleView();
     lastSig = sig;
   } else if(sig !== lastSig){
     const pan=cy.pan(), zoom=cy.zoom();
     cy.elements().remove(); cy.add(els); cy.layout(layout()).run();
     cy.pan(pan); cy.zoom(zoom); lastSig = sig;
   } else {
-    // same topology: refresh labels/status in place, keep view + selection
-    for(const e of els){ if(e.data.source) continue; const n=cy.getElementById(e.data.id);
-      if(n.nonempty()){ n.data('label',e.data.label); if(e.data.status!=null) n.data('status',e.data.status); } }
+    // same topology: refresh labels/status/branch color in place, keep view + selection
+    for(const e of els){
+      const n=cy.getElementById(e.data.id);
+      if(n.empty()) continue;
+      if(e.data.source){ n.data('branchColor', e.data.branchColor); continue; }
+      n.data('label',e.data.label); n.data('branchColor', e.data.branchColor);
+      if(e.data.status!=null) n.data('status',e.data.status);
+      n.data('archived', !!e.data.archived);
+    }
   }
+  cy.nodes('[kind="session"]').forEach(n => n.toggleClass('archived', !!n.data('archived')));
   if(selectedId){ cy.nodes().removeClass('sel'); const n=cy.getElementById('s:'+selectedId); if(n.nonempty()) n.addClass('sel'); }
 }
 
@@ -226,6 +284,16 @@ async function renameMission(key, curName){
         {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({name})});
     toast('Task renamed.'); lastSig=null; await refresh(true);
   }catch(e){ toast('Rename failed: '+e.message); }
+}
+
+// ---- archive (hides from the dashboard only; never touches transcript files) ----
+async function setArchived(id, archived){
+  try{
+    await api('/api/sessions/'+encodeURIComponent(id)+'/'+(archived?'archive':'unarchive'), {method:'POST'});
+    toast(archived? 'Archived. Enable "show archived" to see it again.' : 'Unarchived.');
+    lastSig=null; await refresh(true);
+    if(selectedId===id) selectSession(id);
+  }catch(e){ toast((archived?'Archive':'Unarchive')+' failed: '+e.message); }
 }
 
 // ---- detail pane ----
@@ -277,7 +345,9 @@ async function selectSession(id){
       <button id="btnCopyResume">Copy resume cmd</button>
       <button id="btnOpen">Open terminal</button>
       <button id="btnRead">Read file</button>
+      <button id="btnArchive" class="danger">${s.archived? '📦 Unarchive' : '📦 Archive'}</button>
     </div>
+    ${s.archived? '<div class="dim" style="font-size:12px;margin-top:-4px">archived — hidden from the dashboard by default; the session file is untouched</div>' : ''}
     <div class="sec"><b>Task progress</b>${progressBar(s.progress)}${todosHtml(s.todos)}</div>
     <div class="sec"><b>Sub-agents (${(s.subagents||[]).length})</b>
       ${(s.subagents&&s.subagents.length)? '<div id="cySub"></div>' : '<div class="dim">no sub-agents spawned</div>'}</div>
@@ -306,6 +376,11 @@ async function selectSession(id){
       const el=$('#reader'); el.style.display='block'; el.textContent=r.path+'\\n\\n'+r.content; }
     catch(e){ toast('Read failed: '+e.message); }
   };
+  $('#btnArchive').onclick = ()=>{
+    if(!s.archived && !confirm('Archive this session? It will be hidden from the dashboard '+
+      '(toggle "show archived" to bring it back). The session file itself is never touched.')) return;
+    setArchived(id, !s.archived);
+  };
   if(s.subagents && s.subagents.length) renderSubgraph(s);
 }
 
@@ -320,13 +395,14 @@ function renderSubgraph(s){
   });
   if(cySub){ try{cySub.destroy();}catch(_){}}
   cySub = cytoscape({ container:$('#cySub'), elements:els,
-    layout:{ name:'breadthfirst', directed:true, roots:'#root', padding:12, spacingFactor:1.1, animate:false },
+    layout:{ name:'breadthfirst', directed:true, roots:'#root', padding:12, spacingFactor:1.1, animate:false,
+      transform:(node, pos)=>({x:pos.y, y:pos.x}) },
     wheelSensitivity:0.2, minZoom:0.3, maxZoom:2.5,
     style:[
       { selector:'node', style:{ 'label':'data(label)', 'color':PALETTE.fg, 'font-size':9,
           'text-wrap':'wrap', 'text-max-width':110, 'text-valign':'center', 'text-halign':'center',
-          'width':'label','height':'label','padding':'6px','shape':'round-rectangle',
-          'background-color':PALETTE.panel,'border-width':1.5,'border-color':PALETTE.task } },
+          'width':'label','height':'label','padding':'7px 10px','shape':'round-rectangle',
+          'corner-radius':'auto', 'background-color':PALETTE.panel,'border-width':1.5,'border-color':PALETTE.task } },
       { selector:'node[main=1]', style:{ 'background-color':PALETTE.accent,'color':'#fff','border-color':PALETTE.accent,'font-weight':'bold' } },
       { selector:'edge', style:{ 'width':1.4,'line-color':PALETTE.task,'curve-style':'bezier',
           'target-arrow-shape':'triangle','target-arrow-color':PALETTE.task,'arrow-scale':0.8 } },
@@ -343,14 +419,22 @@ async function refresh(force){
     if(!didInitFocus){
       didInitFocus = true;
       const m = (location.hash||'').match(/^#s:(.+)$/);
-      if(m && data.missions.some(mm=>mm.sessions.some(s=>s.id===decodeURIComponent(m[1]))))
-        selectSession(decodeURIComponent(m[1]));
+      if(m){
+        const wantId = decodeURIComponent(m[1]);
+        const target = data.missions.flatMap(mm=>mm.sessions).find(s=>s.id===wantId);
+        if(target){
+          if(target.archived){ showArchived=true; $('#showArchived').checked=true; }
+          selectSession(wantId);
+        }
+      }
     }
   }catch(e){ $('#refreshInfo').textContent = 'refresh failed: '+e.message; }
 }
 $('#pauseBtn').onclick = ()=>{ paused=!paused; $('#pauseBtn').textContent = paused?'Resume':'Pause'; };
-$('#fitBtn').onclick = ()=> cy && cy.fit(null, 40);
+$('#fitBtn').onclick = ()=>{ if(!cy) return; cy.fit(null, 40); settleView(); };
 $('#search').addEventListener('input', ()=>{ if(treeData){ lastSig=null; renderGraph(treeData); }});
+$('#showArchived').addEventListener('change', e=>{ showArchived=e.target.checked;
+  if(treeData){ lastSig=null; renderGraph(treeData); } });
 refresh();
 setInterval(refresh, 4000);
 </script>

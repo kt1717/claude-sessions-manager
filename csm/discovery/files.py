@@ -83,6 +83,8 @@ def parse_transcript(path: Path, config: Config) -> Optional[Session]:
                 if not isinstance(obj, dict):
                     continue
                 if obj.get("cwd"):
+                    if session.launch_cwd is None:
+                        session.launch_cwd = obj["cwd"]
                     session.cwd = obj["cwd"]
                 if obj.get("gitBranch"):
                     session.git_branch = obj["gitBranch"]
@@ -280,6 +282,14 @@ class FilesAdapter:
                     continue
                 # skip obvious non-transcript jsonl (e.g. history)
                 if jsonl.name == "history.jsonl":
+                    continue
+                # Externalized subagent transcripts (<sid>/subagents/agent-<id>.jsonl,
+                # including nested .../subagents/workflows/wf_.../agent-<id>.jsonl)
+                # are already surfaced via _discover_subagents() on their parent
+                # session. Without this they also get parsed here as bogus
+                # independent top-level "sessions" (id "agent-<hash>", grouped by
+                # whatever cwd their tool calls happened to run in).
+                if "subagents" in jsonl.parts:
                     continue
                 s = parse_transcript(jsonl, config)
                 if s:

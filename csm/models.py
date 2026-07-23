@@ -71,6 +71,11 @@ class Session(BaseModel):
     process: Optional[ProcessInfo] = None
     project_root: Optional[str] = None
     cwd: Optional[str] = None
+    # First cwd seen in the transcript: the directory `claude` was launched from,
+    # which is what its ~/.claude/projects/<encoded> folder is keyed on. `cwd` can
+    # drift later in the transcript (e.g. the user `cd`s elsewhere), so only
+    # launch_cwd is safe to resume `--resume` in.
+    launch_cwd: Optional[str] = None
     session_file: Optional[str] = None
     markdown_file: Optional[str] = None
     log_file: Optional[str] = None
@@ -84,6 +89,7 @@ class Session(BaseModel):
     progress: Optional[Progress] = None
     subagents: list[SubAgent] = Field(default_factory=list)
     label: Optional[str] = None  # user override; None if unset
+    archived: bool = False  # hidden from the default dashboard view; file untouched
 
     def add_evidence(self, kind: str, detail: str) -> None:
         self.evidence.append(Evidence(kind=kind, detail=detail))

@@ -15,7 +15,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response
 
 from .config import Config, load_config
 from .discovery import build_snapshot
-from .labels import LabelError, set_mission_label, set_session_label
+from .labels import LabelError, set_archived, set_mission_label, set_session_label
 from .launcher import (LaunchError, build_open_command, build_resume_command,
                        open_terminal, read_file_preview, resume_session)
 from .redact import redact
@@ -44,6 +44,10 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/", response_class=HTMLResponse)
     def index():
         return (WEB_DIR / "index.html").read_text()
+
+    @app.get("/classic", response_class=HTMLResponse)
+    def classic():
+        return (WEB_DIR / "classic.html").read_text()
 
     @app.get("/vendor/{name}")
     def vendor(name: str):
@@ -142,12 +146,28 @@ def create_app(config: Config | None = None) -> FastAPI:
             raise HTTPException(status_code=400, detail=str(exc))
         return {"ok": True, "key": key, "name": name}
 
+    @app.post("/api/sessions/{session_id}/archive")
+    def api_archive_session(session_id: str):
+        # Display-only: hides the session from the default dashboard view.
+        # Never touches the underlying transcript/markdown/log files.
+        _, sess = get_session(session_id)
+        set_archived(config, sess.id, True)
+        return {"ok": True, "id": sess.id, "archived": True}
+
+    @app.post("/api/sessions/{session_id}/unarchive")
+    def api_unarchive_session(session_id: str):
+        _, sess = get_session(session_id)
+        set_archived(config, sess.id, False)
+        return {"ok": True, "id": sess.id, "archived": False}
+
     @app.post("/api/sessions/{session_id}/resume")
     def api_resume(session_id: str):
         if not config.enable_gui_actions:
             raise HTTPException(status_code=403, detail="GUI actions disabled in config")
         _, sess = get_session(session_id)
-        target = sess.project_root or sess.cwd
+        # Must be the directory `claude` was launched from (not project_root or the
+        # latest cwd) — `claude --resume` looks up the session by that exact path.
+        target = sess.launch_cwd or sess.cwd
         if not target or not Path(target).is_dir():
             raise HTTPException(status_code=400, detail="no existing project directory")
         try:
@@ -159,7 +179,7 @@ def create_app(config: Config | None = None) -> FastAPI:
     @app.get("/api/sessions/{session_id}/resume-command")
     def api_resume_command(session_id: str):
         _, sess = get_session(session_id)
-        target = sess.project_root or sess.cwd
+        target = sess.launch_cwd or sess.cwd
         if not target:
             return {"command": None, "reason": "no project directory detected"}
         try:

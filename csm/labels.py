@@ -1,7 +1,11 @@
-"""Persistence for user-assigned (renamable) task names.
+"""Persistence for user-assigned (renamable) task names and archived sessions.
 
 Sidecar JSON, shape:
-    {"sessions": {"<session-id>": "name"}, "missions": {"<project_root>": "name"}}
+    {"sessions": {"<session-id>": "name"}, "missions": {"<project_root>": "name"},
+     "archived": ["<session-id>", ...]}
+
+Archiving only ever hides a session from the default dashboard view via this
+sidecar file — it never touches the underlying transcript/markdown/log files.
 
 All IO is defensive: a missing or malformed file reads as empty, and a write
 never leaves a half-written file (write-to-temp then atomic replace).
@@ -38,7 +42,7 @@ def sanitize_name(name: str) -> str:
 
 
 def _empty() -> dict:
-    return {"sessions": {}, "missions": {}}
+    return {"sessions": {}, "missions": {}, "archived": []}
 
 
 def load_labels(config: Config) -> dict:
@@ -52,9 +56,11 @@ def load_labels(config: Config) -> dict:
         return _empty()
     sessions = data.get("sessions")
     missions = data.get("missions")
+    archived = data.get("archived")
     return {
         "sessions": sessions if isinstance(sessions, dict) else {},
         "missions": missions if isinstance(missions, dict) else {},
+        "archived": [a for a in archived if isinstance(a, str)] if isinstance(archived, list) else [],
     }
 
 
@@ -83,3 +89,17 @@ def set_mission_label(config: Config, project_root: str, name: str) -> str:
     data["missions"][project_root] = clean
     save_labels(config, data)
     return clean
+
+
+def set_archived(config: Config, session_id: str, archived: bool) -> bool:
+    """Hide/unhide a session from the default dashboard view. Never touches
+    the underlying transcript/markdown/log files — this is display-only."""
+    data = load_labels(config)
+    ids = set(data["archived"])
+    if archived:
+        ids.add(session_id)
+    else:
+        ids.discard(session_id)
+    data["archived"] = sorted(ids)
+    save_labels(config, data)
+    return archived

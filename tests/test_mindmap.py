@@ -6,8 +6,8 @@ from fastapi.testclient import TestClient
 
 from csm.config import Config
 from csm.discovery import build_snapshot
-from csm.discovery.files import parse_transcript
-from csm.labels import (LabelError, load_labels, sanitize_name,
+from csm.discovery.files import FilesAdapter, parse_transcript
+from csm.labels import (LabelError, load_labels, sanitize_name, set_archived,
                         set_mission_label, set_session_label)
 from csm.launcher import LaunchError, build_resume_command, resume_session
 from csm.server import create_app
@@ -112,6 +112,21 @@ def test_missing_subagents_dir_is_empty(transcript, tmp_path):
     assert s.progress is None
 
 
+def test_subagent_transcripts_not_double_counted_as_sessions(tmp_path):
+    # Regression: externalized subagent transcripts under <sid>/subagents/ (and
+    # nested .../subagents/workflows/wf_.../) must NOT surface as independent
+    # top-level "agent-<hash>" sessions — they're already represented via the
+    # parent session's `subagents` list. Previously `rglob("*.jsonl")` swept
+    # them up as bogus sessions, often mis-grouped under whatever cwd a tool
+    # call happened to run in (e.g. dumped into the user's home-dir mission).
+    f, _, sid = _write_transcript_with_subagents(tmp_path)
+    cfg = Config(scan_paths=[str(tmp_path / "scan")])
+    sessions = FilesAdapter().discover(cfg)
+    ids = {s.id for s in sessions}
+    assert ids == {sid}  # only the real session, none of its subagent files
+    assert not any(i.startswith("agent-") for i in ids)
+
+
 def test_sanitize_name_rules():
     assert sanitize_name("  hello world  ") == "hello world"
     assert sanitize_name("line1\nline2\t!") == "line1line2!"  # control chars stripped
@@ -123,12 +138,38 @@ def test_sanitize_name_rules():
 
 def test_labels_roundtrip(tmp_path):
     cfg = Config(labels_file=str(tmp_path / "labels.json"))
-    assert load_labels(cfg) == {"sessions": {}, "missions": {}}
+    assert load_labels(cfg) == {"sessions": {}, "missions": {}, "archived": []}
     set_session_label(cfg, "sid-1", " My Task ")
     set_mission_label(cfg, "/home/x/proj", "Cool Mission")
     data = load_labels(cfg)
     assert data["sessions"]["sid-1"] == "My Task"
     assert data["missions"]["/home/x/proj"] == "Cool Mission"
+
+
+def test_archive_roundtrip(tmp_path):
+    cfg = Config(labels_file=str(tmp_path / "labels.json"))
+    assert load_labels(cfg)["archived"] == []
+    set_archived(cfg, "sid-1", True)
+    assert load_labels(cfg)["archived"] == ["sid-1"]
+    # archiving twice is idempotent
+    set_archived(cfg, "sid-1", True)
+    assert load_labels(cfg)["archived"] == ["sid-1"]
+    set_archived(cfg, "sid-1", False)
+    assert load_labels(cfg)["archived"] == []
+    # unarchiving something never archived is a no-op, not an error
+    set_archived(cfg, "never-archived", False)
+    assert load_labels(cfg)["archived"] == []
+
+
+def test_archived_flag_in_snapshot(tmp_path):
+    f, proj, sid = _write_transcript_with_subagents(tmp_path)
+    cfg = Config(scan_paths=[str(tmp_path / "scan")],
+                 labels_file=str(tmp_path / "labels.json"), mock_data_file="")
+    snap = build_snapshot(cfg, include_processes=False)
+    assert snap.find_session(sid).archived is False
+    set_archived(cfg, sid, True)
+    snap2 = build_snapshot(cfg, include_processes=False)
+    assert snap2.find_session(sid).archived is True
 
 
 def test_label_override_in_snapshot(tmp_path):
@@ -191,6 +232,17 @@ def test_session_endpoint_has_new_fields(real_client):
     assert s["label"] is None
 
 
+def test_classic_dashboard_route_serves_alongside_mindmap(real_client):
+    client, _, _, _ = real_client
+    mindmap = client.get("/")
+    classic = client.get("/classic")
+    assert mindmap.status_code == 200 and classic.status_code == 200
+    assert "cytoscape" in mindmap.text.lower()
+    assert "cytoscape" not in classic.text.lower()  # classic has no graph lib
+    assert 'href="/classic"' in mindmap.text  # cross-links between the two
+    assert 'href="/"' in classic.text
+
+
 def test_rename_session_persists(real_client):
     client, cfg, sid, _ = real_client
     r = client.post(f"/api/sessions/{sid}/rename", json={"name": "Ported feature"})
@@ -234,3 +286,32 @@ def test_resume_endpoint_launches(real_client, monkeypatch):
     assert r.status_code == 200
     assert r.json()["launched"] is True
     assert len(spawned) == 1
+
+
+def test_archive_endpoint_persists_and_hides_nothing_on_disk(real_client):
+    client, cfg, sid, _ = real_client
+    transcript_path = client.get(f"/api/sessions/{sid}").json()["session_file"]
+    r = client.post(f"/api/sessions/{sid}/archive")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "id": sid, "archived": True}
+    assert load_labels(cfg)["archived"] == [sid]
+    # session is still fully readable by id — archiving is display-only
+    s2 = client.get(f"/api/sessions/{sid}").json()
+    assert s2["archived"] is True
+    from pathlib import Path
+    assert Path(transcript_path).exists()  # transcript file untouched
+
+
+def test_unarchive_endpoint_persists(real_client):
+    client, cfg, sid, _ = real_client
+    client.post(f"/api/sessions/{sid}/archive")
+    r = client.post(f"/api/sessions/{sid}/unarchive")
+    assert r.status_code == 200
+    assert r.json() == {"ok": True, "id": sid, "archived": False}
+    assert load_labels(cfg)["archived"] == []
+    assert client.get(f"/api/sessions/{sid}").json()["archived"] is False
+
+
+def test_archive_unknown_session_404s(real_client):
+    client, _, _, _ = real_client
+    assert client.post("/api/sessions/does-not-exist/archive").status_code == 404
