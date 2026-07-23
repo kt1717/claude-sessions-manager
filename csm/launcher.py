@@ -8,15 +8,21 @@ Safety design:
 """
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Optional
 
 from .config import Config
 
 # launcher name -> argv template; {dir} is replaced with the validated directory.
+# "wt"/"powershell" run on native Windows; "wt-wsl" runs when csm itself is
+# inside WSL and bounces out to a real Windows Terminal window on the Windows
+# side (WSL has no GUI terminal emulator of its own) — see _in_wsl() below.
+# {distro} is only used by wt-wsl and is otherwise ignored by str.format().
 TERMINAL_WHITELIST: dict[str, list[str]] = {
     "gnome-terminal": ["gnome-terminal", "--working-directory={dir}"],
     "konsole": ["konsole", "--workdir", "{dir}"],
@@ -24,6 +30,12 @@ TERMINAL_WHITELIST: dict[str, list[str]] = {
     "xterm": ["xterm"],
     "x-terminal-emulator": ["x-terminal-emulator"],
     "tmux": ["tmux", "new-window", "-c", "{dir}"],
+    "wt": ["wt.exe", "-d", "{dir}"],
+    # powershell.exe/cmd.exe have no cwd flag; open_terminal()/resume_session()
+    # pass Popen(cwd=...) instead (same pattern already used for xterm above).
+    "powershell": ["powershell.exe", "-NoExit"],
+    "cmd": ["cmd.exe"],
+    "wt-wsl": ["wt.exe", "wsl.exe", "-d", "{distro}", "--cd", "{dir}"],
 }
 
 # launcher name -> argv template for `claude --resume <id>`; {dir}/{id} substituted.
@@ -34,7 +46,36 @@ RESUME_WHITELIST: dict[str, list[str]] = {
     "xterm": ["xterm", "-e", "claude", "--resume", "{id}"],
     "x-terminal-emulator": ["x-terminal-emulator", "-e", "claude", "--resume", "{id}"],
     "tmux": ["tmux", "new-window", "-c", "{dir}", "claude", "--resume", "{id}"],
+    "wt": ["wt.exe", "-d", "{dir}", "claude", "--resume", "{id}"],
+    # -Command takes a script string, not argv — but {id} is pre-validated by
+    # _SAFE_SESSION_ID (alnum/._- only, no quotes) before it ever reaches here,
+    # so embedding it in a single-quoted PowerShell literal is safe.
+    "powershell": ["powershell.exe", "-NoExit", "-Command", "& claude --resume '{id}'"],
+    # /K keeps the window open after running the command (vs /C, which closes
+    # it immediately). Same argv-safety note as powershell above: {id} is the
+    # only interpolated value cmd.exe's own parser ever sees, and it's already
+    # restricted to alnum/._- by _SAFE_SESSION_ID — no cmd.exe metacharacters
+    # (&|<>^") are possible in it.
+    "cmd": ["cmd.exe", "/K", "claude --resume {id}"],
+    "wt-wsl": ["wt.exe", "wsl.exe", "-d", "{distro}", "--cd", "{dir}",
+              "--", "claude", "--resume", "{id}"],
 }
+
+
+def _in_wsl() -> bool:
+    """True when csm itself is running inside WSL (as opposed to native Windows
+    or plain Linux) — WSL_DISTRO_NAME is set by WSL's own init; the /proc/version
+    check is a fallback for older WSL1 setups that may not set it."""
+    if os.environ.get("WSL_DISTRO_NAME"):
+        return True
+    try:
+        return "microsoft" in Path("/proc/version").read_text().lower()
+    except OSError:
+        return False
+
+
+def _wsl_distro_name() -> Optional[str]:
+    return os.environ.get("WSL_DISTRO_NAME")
 
 # A session id must look like a uuid or a safe token before it reaches an argv.
 _SAFE_SESSION_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -53,7 +94,16 @@ def pick_terminal(config: Config) -> Optional[str]:
             raise LaunchError(
                 f"terminal_launcher '{name}' is not in the whitelist: "
                 f"{sorted(TERMINAL_WHITELIST)}")
+        if name == "wt-wsl" and not _wsl_distro_name():
+            return None
         return name if shutil.which(name) else None
+    if sys.platform == "win32":
+        for name in ("wt", "powershell", "cmd"):
+            if shutil.which(name):
+                return name
+        return None
+    if _in_wsl() and _wsl_distro_name() and shutil.which("wt.exe") and shutil.which("wsl.exe"):
+        return "wt-wsl"
     for name in ("gnome-terminal", "konsole", "x-terminal-emulator", "xterm", "tmux"):
         if shutil.which(name):
             return name
@@ -68,7 +118,10 @@ def build_open_command(directory: str, config: Config) -> list[str]:
     term = pick_terminal(config)
     if not term:
         raise LaunchError("no whitelisted terminal emulator found (see `csm doctor`)")
-    return [part.format(dir=str(d.resolve())) for part in TERMINAL_WHITELIST[term]]
+    if term == "wt-wsl" and not _wsl_distro_name():
+        raise LaunchError("wt-wsl requires WSL_DISTRO_NAME to be set")
+    return [part.format(dir=str(d.resolve()), distro=_wsl_distro_name() or "")
+            for part in TERMINAL_WHITELIST[term]]
 
 
 def open_terminal(directory: str, config: Config, dry_run: bool = False) -> list[str]:
@@ -91,7 +144,9 @@ def build_resume_command(session_id: str, directory: str, config: Config) -> lis
     term = pick_terminal(config)
     if not term:
         raise LaunchError("no whitelisted terminal emulator found (see `csm doctor`)")
-    return [part.format(dir=str(d.resolve()), id=session_id)
+    if term == "wt-wsl" and not _wsl_distro_name():
+        raise LaunchError("wt-wsl requires WSL_DISTRO_NAME to be set")
+    return [part.format(dir=str(d.resolve()), id=session_id, distro=_wsl_distro_name() or "")
             for part in RESUME_WHITELIST[term]]
 
 

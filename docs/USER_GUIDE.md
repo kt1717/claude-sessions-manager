@@ -37,7 +37,7 @@ Key settings:
 |---|---|
 | `scan_paths` | directories scanned for transcripts (`*.jsonl`) and markdown notes |
 | `ignored_paths` | never scanned or shown |
-| `terminal_launcher` | `auto` or one of: gnome-terminal, konsole, xterm, x-terminal-emulator, tmux |
+| `terminal_launcher` | `auto` or one of: gnome-terminal, konsole, xterm, x-terminal-emulator, tmux (Linux); wt, powershell, cmd (native Windows, tried in that order); wt-wsl (inside WSL, opens a real Windows Terminal window) |
 | `safe_read_command` | pager for `csm read` (whitelist: less, more, cat, bat, head) |
 | `process_match_patterns` | regexes that identify Claude processes |
 | `idle_after_minutes` / `completed_after_hours` | status thresholds |

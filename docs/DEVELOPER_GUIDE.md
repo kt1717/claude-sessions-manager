@@ -118,4 +118,11 @@ isolated tmp-path configs so they never scan the real home directory.
 - Persist snapshots to sqlite for history/trends of token usage.
 - `csm watch` desktop notifications when a session goes idle/fails.
 - WebSocket push instead of polling; collapsible tree with per-mission token totals.
-- Windows/macOS terminal launchers (wt.exe, Terminal.app via `open -a`).
+- ~~Windows/WSL terminal launchers~~ — done: `wt` (native Windows Terminal),
+  `powershell` (native Windows fallback), `wt-wsl` (bounces from inside WSL
+  out to a Windows Terminal window, since WSL has no GUI terminal of its own).
+  See `launcher.py`'s `pick_terminal()`. Only verified by unit test (argv
+  construction, platform/env mocked) — nobody's run this on a real Windows
+  box yet, so treat it as untested-in-the-wild until someone does.
+- macOS terminal launcher (Terminal.app via `open -a Terminal <dir>`, or
+  iTerm via `open -a iTerm`) — not yet done.

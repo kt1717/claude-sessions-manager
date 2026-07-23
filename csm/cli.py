@@ -272,6 +272,15 @@ def cmd_doctor(args, config) -> int:
         ok = ok and good
 
     console.print("[bold]csm doctor[/]")
+    import sys as _sys
+    from .launcher import _in_wsl
+    if _sys.platform == "win32":
+        env_label = "native Windows"
+    elif _in_wsl():
+        env_label = "WSL"
+    else:
+        env_label = "Linux"
+    console.print(f"  [dim]environment: {env_label} ({_sys.platform})[/]")
     check(f"config file {DEFAULT_CONFIG_PATH}", DEFAULT_CONFIG_PATH.is_file(),
           "run `csm config init`")
     for p in config.expanded_scan_paths():
@@ -287,7 +296,8 @@ def cmd_doctor(args, config) -> int:
     except LaunchError as exc:
         check(f"terminal launcher ({exc})", False)
     check(f"terminal launcher: {term or 'none found'}", term is not None,
-          "install gnome-terminal/konsole/xterm or set terminal_launcher")
+          "install gnome-terminal/konsole/xterm (Linux), Windows Terminal (native "
+          "Windows/WSL), or set terminal_launcher explicitly")
     import shutil as _sh
     check(f"safe reader '{config.safe_read_command}'", bool(_sh.which(config.safe_read_command)),
           "set safe_read_command to an available pager")

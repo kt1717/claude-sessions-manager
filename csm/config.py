@@ -33,7 +33,8 @@ DEFAULT_MODEL_PATTERNS = [
 class Config:
     scan_paths: list[str] = field(default_factory=lambda: list(DEFAULT_SCAN_PATHS))
     ignored_paths: list[str] = field(default_factory=list)
-    terminal_launcher: str = "auto"  # auto | gnome-terminal | konsole | xterm | tmux
+    # auto | gnome-terminal | konsole | xterm | tmux | wt | powershell | cmd | wt-wsl
+    terminal_launcher: str = "auto"
     editor_command: str = ""          # e.g. "code" — empty means unset
     safe_read_command: str = "less"
     refresh_interval_seconds: float = 3.0
@@ -92,7 +93,10 @@ scan_paths:
 # Paths never scanned or displayed.
 ignored_paths: []
 
-# Terminal used by `csm open`: auto | gnome-terminal | konsole | xterm | tmux
+# Terminal used by `csm open`: auto | gnome-terminal | konsole | xterm | tmux |
+# wt (Windows Terminal, native Windows) | powershell (native Windows fallback) |
+# cmd (native Windows, last-resort fallback) |
+# wt-wsl (bounces from inside WSL out to a Windows Terminal window)
 terminal_launcher: auto
 
 # Editor for opening files (used only if set), e.g. "code" or "vim".
